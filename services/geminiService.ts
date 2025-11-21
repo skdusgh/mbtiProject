@@ -1,52 +1,27 @@
 import { GoogleGenAI } from "@google/genai";
 
-let aiClient: GoogleGenAI | null = null;
-
-// 환경에 따라 API Key를 안전하게 가져오는 함수
-const getApiKey = (): string | undefined => {
-  // 1. Vite / Modern Browser Environment (VITE_API_KEY)
-  // import.meta.env가 존재하는지 안전하게 확인
-  try {
-    const meta = import.meta as any;
-    if (meta && meta.env && meta.env.VITE_API_KEY) {
-      return meta.env.VITE_API_KEY;
-    }
-  } catch (e) {
-    // import.meta 접근 오류 무시
-  }
-
-  // 2. Node.js / Webpack Environment (API_KEY)
-  // process 객체가 존재하는지 안전하게 확인
-  try {
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-      return process.env.API_KEY;
-    }
-  } catch (e) {
-    // process 접근 오류 무시
-  }
-  
-  return undefined;
-};
-
-const getAI = () => {
-  const apiKey = getApiKey();
-
-  if (!apiKey) {
-    throw new Error("API Key가 설정되지 않았습니다. Vercel 환경 변수 설정에서 'VITE_API_KEY'를 등록했는지 확인해주세요.");
-  }
-
-  if (!aiClient) {
-    aiClient = new GoogleGenAI({ apiKey });
-  }
-  return aiClient;
-};
-
 export const generateMBTIResponse = async (
   userMessage: string,
   history: { role: 'user' | 'model'; text: string }[]
 ) => {
+  // Guidelines require using process.env.API_KEY exclusively.
+  const apiKey = process.env.API_KEY;
+
+  // 1. API 키가 없는 경우 앱을 멈추지 않고 안내 메시지 반환
+  if (!apiKey) {
+    console.warn("API Key is missing");
+    return `🚨 **API 키 설정 오류**
+    
+환경 변수에 API 키가 설정되지 않았습니다.
+
+**해결 방법:**
+1. 환경 변수 설정에서 \`API_KEY\`를 확인해주세요.
+2. 값으로 Google Gemini API 키를 입력해야 합니다.`;
+  }
+
   try {
-    const ai = getAI();
+    // 2. 요청이 들어올 때 클라이언트 생성 (지연 초기화)
+    const ai = new GoogleGenAI({ apiKey });
     
     const chat = ai.chats.create({
       model: 'gemini-2.5-flash',
@@ -71,15 +46,21 @@ export const generateMBTIResponse = async (
 
     const response = await chat.sendMessage({ message: userMessage });
     return response.text;
+    
   } catch (error) {
     console.error("Gemini API Error:", error);
     
     const errorMessage = error instanceof Error ? error.message : String(error);
     
-    if (errorMessage.includes("API Key") || errorMessage.includes("API_KEY")) {
-      return "⚠️ 시스템 설정 오류: API 키가 없습니다. Vercel 환경 변수에 'VITE_API_KEY'가 올바르게 설정되었는지 확인해주세요.";
+    // 구체적인 에러 상황별 안내
+    if (errorMessage.includes("API Key") || errorMessage.includes("403")) {
+      return "⚠️ **API 키 인증 실패**\n\n입력된 API 키가 올바르지 않거나 만료되었습니다. 환경 변수를 확인해주세요.";
     }
     
-    return "죄송합니다. 현재 MBTI 분석 엔진에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.";
+    if (errorMessage.includes("429")) {
+      return "⏳ **사용량 초과**\n\n잠시 후 다시 시도해주세요. (무료 사용량 한도에 도달했을 수 있습니다.)";
+    }
+
+    return "죄송합니다. 일시적인 오류로 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요.";
   }
 };
